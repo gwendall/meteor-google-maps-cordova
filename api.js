@@ -1,11 +1,69 @@
+Meteor.startup(function() {
+  MapControl.__domIsRendered = true;
+});
+
 MapControl = {
+
+  __map: null,
+  __isCreated: new ReactiveVar(false),
+  __isReady: new ReactiveVar(false),
+  __markers: [],
+  __markersInBounds: [],
+  __onMarkerClick: null,
+  __onMapReady: null,
+  __onMapMove: null,
+  __onMapMoveStart: null,
+  __onMapMoveEnd: null,
+  __onMapClick: null,
+  __onMapClose: null,
+
+  __domContainer: null,
+  __domIsRendered: false,
+  __elementIsDomNode: function(obj) {
+    try {
+      return obj instanceof HTMLElement;
+    }
+    catch(e){
+      return (typeof obj==="object") && (obj.nodeType===1) && (typeof obj.style === "object") && (typeof obj.ownerDocument ==="object");
+    }
+  },
+  __pluginIsAvailable: function() {
+    return !!Meteor._get(window.plugin || {}, 'google', 'maps', 'Map');
+  },
+
+  __hasErrors: function() {
+    if (!Meteor.isCordova) {
+      console.log('You have to run the package from Cordova.');
+      return true;
+    }
+    if (!this.__domContainer) {
+      console.log('You have to pass a DOM container to build the map.');
+      return true;
+    }
+    if (!this.__elementIsDomNode(this.__domContainer)) {
+      console.log('The map container has to be a DOM node.');
+      return true;
+    }
+    if (!this.__pluginIsAvailable()) {
+      console.log('The map plugin is not available.');
+      return true;
+    }
+    return false;
+  },
 
   setup: function(container, options) {
 
+    this.__domContainer = container;
+    if (this.__hasErrors()) return;
+    if (this.isCreated()) this.destroy();
+
     var self = this;
     var map = plugin.google.maps.Map.getMap(container, options);
-    map.setClickable(true);
+    self.__isCreated.set(true);
+    self.__isReady.set(false);
     self.__map = map;
+    self.__markers = [];
+    self.__markersInBounds = [];
 
     map.on(plugin.google.maps.event.MAP_READY, function() {
       self.__isReady.set(true);
@@ -21,6 +79,8 @@ MapControl = {
     });
 
     map.on(plugin.google.maps.event.MAP_CLOSE, function() {
+      self.__isCreated.set(false);
+      self.__isReady.set(false);
       self.__onMapClose && self.__onMapClose.apply(self, [map]);
     });
 
@@ -33,14 +93,14 @@ MapControl = {
       }
       handle = Meteor.setTimeout(function() {
         handle = null;
-        self.__onMapMoveEnd && self.__onMapMoveEnd.apply(self, [map]);
         map.getVisibleRegion(function(bounds) {
           self.__markersInBounds = _.filter(self.__markers, function(item) {
             var latLng = item.marker.get('position');
             return bounds.contains(latLng);
           });
+          self.__onMapMoveEnd && self.__onMapMoveEnd.apply(self, [map]);
         });
-      }, 500);
+      }, 300);
     });
 
   },
@@ -50,7 +110,31 @@ MapControl = {
   },
 
   destroy: function() {
-    this.__map.remove();
+    if (this.isCreated()) {
+      this.__domContainer = null;
+      this.__map.remove();
+      this.__map = null;
+      this.__isCreated.set(false);
+      this.__isReady.set(false);
+    } else {
+      console.log('Can\t destroy the map.');
+    }
+  },
+
+  setView: function(latlng, zoom, duration, callback) {
+    zoom = zoom || 15;
+    duration = duration || {};
+    callback = callback || function() {};
+    var location = this.getLatLng(latlng);
+    this.__map.animateCamera({
+      'target': location,
+      'zoom': zoom,
+      'duration': duration
+    }, callback);
+  },
+
+  isCreated: function() {
+    return this.__isCreated.get();
   },
 
   isReady: function() {
@@ -86,17 +170,9 @@ MapControl = {
   },
 
   centerMap: function(latitude, longitude) {
-
-    if (this.__center) {
-      if ((this.__center.lat === latitude) && (this.__center.lng === longitude)) {
-        return;
-      }
-    }
-    this.__center = new plugin.google.maps.LatLng(latitude, longitude);
-
-    var that = this;
-    that.__map.animateCamera({
-      'target': that.__center,
+    var center = this.getLatLng({ lat: latitude, lng: longitude });
+    this.__map.animateCamera({
+      'target': center,
       'zoom': 16,
       'duration': 1000
     }, function() {});
@@ -104,71 +180,6 @@ MapControl = {
 
   onMarkerClick: function(handler) {
     this.__onMarkerClick = handler;
-  },
-
-  setMarkers: function(markers) {
-    var newMarkersIds = _.map(markers, this.getMarkerId);
-    var currentMarkerIds = _.map(this.__markers, this.getMarkerId);
-    var removedMarkersIds = _.difference(currentMarkerIds, newMarkersIds);
-
-
-    console.log('@@@ new markers', newMarkersIds);
-    console.log('@@@ current markers', currentMarkerIds);
-    console.log('@@@ removed markers', removedMarkersIds);
-
-
-    // remove current markers that are not in the new set
-    this.removeMarkers(removedMarkersIds);
-
-    // add new ones (addMarkers auto checks for dupes)
-    this.addMarkers(markers);
-  },
-
-  addMarkers: function(markers) {
-    var that = this;
-
-    console.log('@@@@@ adding markers', markers.length);
-
-    _.each(markers, function(m) {
-
-      var existingMarker = _.find(that.__markers, function(m) {
-        return m._id === that.getMarkerId(m);
-      });
-
-      if (!existingMarker) {
-        that.__map.addMarker({
-          position: new plugin.google.maps.LatLng(m.latitude, m.longitude),
-          _id: m._id
-        },function(marker) {
-          that.__markers.push({
-            _id: marker.get('_id'),
-            marker: marker
-          });
-          marker.setOpacity(0.5);
-          marker.addEventListener(plugin.google.maps.event.MARKER_CLICK, function(marker) {
-            if (that.__onMarkerClick) {
-              that.__onMarkerClick.call(that, marker);
-            }
-          });
-        });
-      } else {
-        console.log('@@@ marker already on the map, skipping');
-      }
-
-    });
-  },
-
-  removeMarkers: function(markers) {
-    var ids = _.map(markers, this.getMarkerId);
-    var markersToRemove = _.filter(this.__markers, function(m) {
-      return ids.indexOf(m._id) !== -1;
-    });
-
-    _.each(markersToRemove, function(m) { m.marker.remove(); });
-    console.log('removing', ids);
-    this.__markers = _.filter(this.__markers, function(m) {
-      return ids.indexOf(m._id) === -1;
-    });
   },
 
   getMarkers: function() {
@@ -181,7 +192,8 @@ MapControl = {
 
   addMarker: function(options, callback) {
     var self = this;
-    self.__map.addMarker(options, function(marker) {
+    if (_.findWhere(self.__markers, { _id: options._id })) return;
+    self.__map && self.__map.addMarker(options, function(marker) {
       self.__markers.push({
         '_id' : marker.get('_id'),
         'marker' : marker
@@ -192,26 +204,13 @@ MapControl = {
 
   removeMarker: function(id) {
     var item = this.getMarker(id) || {};
-    var marker = Meteor._get(item, 'marker');
-    marker.remove();
-    self.__markers = _.without(self.__markers, item);
+    if (!item.marker) return;
+    item.marker.remove();
+    this.__markers = _.without(this.__markers, item);
   },
 
-  getMarkerId: function(marker) {
-    return marker._id || (marker.get && marker.get('_id'));
-  },
-
-  __map: null,
-  __isReady: new ReactiveVar(false),
-  __markers: [],
-  __markersInBounds: [],
-  __onMarkerClick: null,
-  __onMapReady: null,
-  __onMapMove: null,
-  __onMapMoveStart: null,
-  __onMapMoveEnd: null,
-  __onMapClick: null,
-  __onMapClose: null,
-  __center: null
+  getLatLng: function(location) {
+    return new plugin.google.maps.LatLng(location.lat, location.lng);
+  }
 
 };

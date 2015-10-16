@@ -2,7 +2,7 @@ Package.describe({
   name: 'gwendall:google-maps-cordova',
   summary: 'Native Google Maps for Cordova',
   git: 'https://github.com/gwendall/meteor-google-maps-cordova.git',
-  version: '0.1.2'
+  version: '0.1.4'
 });
 
 Cordova.depends({
@@ -10,8 +10,15 @@ Cordova.depends({
 });
 
 Package.onUse(function(api) {
-  api.versionsFrom('1.0');
-  api.use(['reactive-var','templating','tracker', 'underscore'], 'client');
-  api.addFiles(['api.js'], 'client');
+  api.versionsFrom('1.2');
+  api.use([
+    'reactive-var',
+    'templating',
+    'tracker',
+    'underscore'
+  ], 'client');
+  api.addFiles([
+    'api.js'
+  ], 'client');
   api.export('MapControl');
 });
